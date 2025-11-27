@@ -1,6 +1,9 @@
 package lru
 
-import "container/list"
+import (
+	"container/list"
+	"time"
+)
 
 // Cache LRU,不支持并发安全
 type Cache struct {
@@ -14,6 +17,12 @@ type Cache struct {
 type entry struct {
 	key   string
 	value Value
+	// expireAt <= 0 代表不过期
+	expireAt int64
+}
+
+func (e *entry) expired() bool {
+	return e.expireAt > 0 && time.Now().UnixNano() >= e.expireAt
 }
 
 type Value interface {
@@ -33,9 +42,13 @@ func New(maxBytes int64, onEvicted func(string, Value)) *Cache {
 // Get look-ups a key's value
 func (c *Cache) Get(key string) (value Value, ok bool) {
 	if ele, ok := c.cache[key]; ok {
+		e := ele.Value.(*entry)
+		if e.expired() {
+			c.RemoveElement(ele)
+			return nil, false
+		}
 		c.ll.MoveToFront(ele)
-		kv := ele.Value.(*entry)
-		return kv.value, true
+		return e.value, true
 	}
 	return nil, false
 }
@@ -55,14 +68,19 @@ func (c *Cache) RemoveOldest() {
 }
 
 // Add adds a value to the cache.
-func (c *Cache) Add(key string, value Value) {
+func (c *Cache) Add(key string, value Value, ttl time.Duration) {
+	var expireAt int64
+	if ttl > 0 {
+		expireAt = time.Now().Add(ttl).UnixNano()
+	}
 	if ele, ok := c.cache[key]; ok {
 		c.ll.MoveToFront(ele)
-		kv := ele.Value.(*entry)
-		c.nbytes += int64(value.Len()) - int64(kv.value.Len())
-		kv.value = value
+		e := ele.Value.(*entry)
+		c.nbytes += int64(value.Len()) - int64(e.value.Len())
+		e.expireAt = expireAt
+		e.value = value
 	} else {
-		ele := c.ll.PushFront(&entry{key, value})
+		ele := c.ll.PushFront(&entry{key, value, expireAt})
 		c.cache[key] = ele
 		c.nbytes += int64(len(key)) + int64(value.Len())
 	}
@@ -74,4 +92,8 @@ func (c *Cache) Add(key string, value Value) {
 // Len the number of cache entries
 func (c *Cache) Len() int {
 	return c.ll.Len()
+}
+
+func (c *Cache) RemoveElement(ele *list.Element) {
+	c.ll.Remove(ele)
 }

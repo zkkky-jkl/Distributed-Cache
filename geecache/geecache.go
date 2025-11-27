@@ -6,6 +6,7 @@ import (
 	"geecache/geecache/singleflight"
 	"log"
 	"sync"
+	"time"
 )
 
 // Getter loads data for a key.
@@ -29,7 +30,8 @@ type Group struct {
 	peers     PeerPicker
 	// use singleflight.Group to make sure that
 	// each key is only fetched once
-	loader *singleflight.Group
+	loader     *singleflight.Group
+	defaultTTL time.Duration
 }
 
 var (
@@ -54,6 +56,10 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 	return g
 }
 
+func (g *Group) SetDefaultTTL(ttl time.Duration) {
+	g.defaultTTL = ttl
+}
+
 // GetGroup returns the named group previously created with NewGroup, or
 // nil if there's no such group.
 func GetGroup(name string) *Group {
@@ -73,7 +79,7 @@ func (g *Group) Get(key string) (ByteView, error) {
 		log.Printf("%s:Gee Cache hit,value is %s", key, v.String())
 		return v, nil
 	}
-
+	// 缓存不存在，调用load
 	return g.load(key)
 }
 
@@ -88,6 +94,7 @@ func (g *Group) RegisterPeers(peers PeerPicker) {
 func (g *Group) load(key string) (value ByteView, err error) {
 	view, err := g.loader.Do(key, func() (interface{}, error) {
 		if g.peers != nil {
+			// 从分布式设备加载
 			if peer, ok := g.peers.PickPeer(key); ok {
 				if value, err = g.getFromPeer(peer, key); err == nil {
 					return value, nil
@@ -95,6 +102,7 @@ func (g *Group) load(key string) (value ByteView, err error) {
 				log.Println("[GeeCache] Failed to get from peer", err)
 			}
 		}
+		// 无远程节点或选中的设备为自己
 		return g.getLocally(key)
 	})
 	if err == nil {
@@ -116,16 +124,17 @@ func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
 	return ByteView{b: res.Value}, nil
 }
 
+// 调用用户回调函数，并加入cache
 func (g *Group) getLocally(key string) (ByteView, error) {
 	bytes, err := g.getter.Get(key)
 	if err != nil {
 		return ByteView{}, err
 	}
 	value := ByteView{b: cloneBytes(bytes)}
-	g.populateCache(key, value)
+	g.populateCache(key, value, g.defaultTTL)
 	return value, nil
 }
 
-func (g *Group) populateCache(key string, value ByteView) {
-	g.mainCache.add(key, value)
+func (g *Group) populateCache(key string, value ByteView, ttl time.Duration) {
+	g.mainCache.add(key, value, ttl)
 }

@@ -18,7 +18,7 @@ const (
 	defaultReplicas = 50
 )
 
-// HTTPPool has two attributes,self is ip and port or servername, basePath is prefix
+// HTTPPool has two attributes, self is ip and port or servername, basePath is prefix
 type HTTPPool struct {
 	self        string
 	basePath    string
